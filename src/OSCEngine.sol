@@ -119,8 +119,6 @@ contract OSCEngine is ReentrancyGuard {
             specify the healthfactor (and all the calculations to keep it stable)
         */
 
-        
-
         /*Effects
         mint tokens based on value of collateral 
             Get the 1 usd equivalent of collateral
@@ -129,16 +127,16 @@ contract OSCEngine is ReentrancyGuard {
             Check that each token is minted according to the above
         */
         //mapping update
-        s_OSCMinted[msg.sender] += amountToBeMinted
+        s_OSCMinted[msg.sender] += amountToBeMinted;
 
         //actual mint
         /*Interactions
         //orenjiStableCoin.mint();
         */
         //Would likely go into the health factor check function
-        uint256 totalCollateralValueInUsdDepositedByUser = totalCollateralValueInUsdDeposited(msg.sender);
+        uint256 totalCollateralValueInUsdDepositedByUser = getTotalCollateralValueInUsdDeposited(msg.sender);
         //healthfactor check based on collateral deposited
-        revertIfHealthFactorIsBroken(msg.sender, amountToBeMinted);
+        _revertIfHealthFactorIsBroken(msg.sender, amountToBeMinted);
     }
 
     function burn() external {}
@@ -190,24 +188,63 @@ contract OSCEngine is ReentrancyGuard {
 
     function healthFactor() external {}
 
-    /////////////////////////////////////
-    // PUBLIC AND EXTERNAL FUNCTIONS ///
-    ///////////////////////////////////
+    ////////////////////////
+    // PUBLIC FUNCTIONS ///
+    //////////////////////
+    function getUserAccountInformation(address user)
+        public
+        returns (uint256 totalOSCMinted, uint256 collateralValueInUsd)
+    {
+        (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
+    }
 
-    function totalCollateralValueInUsdDeposited(address user) public returns (uint256) {
+    //////////////////////////////////////////
+    // PUBLIC AND EXTERNAL VIEW FUNCTIONS ///
+    ////////////////////////////////////////
+
+    function getTotalCollateralValueInUsdDeposited(address user)
+        public
+        view
+        returns (uint256 collateralDepositedByUser)
+    {
+        collateralDepositedByUser = _getTotalCollateralValueInUsdDeposited(user);
+    }
+
+    /////////////////////////////////
+    // INTERNAL VIEW FUNCTIONS //////
+    ///////////////////////////////
+    function _revertIfHealthFactorIsBroken(address user, uint256 amount) internal view {
+        //check if they have enough health factor, revert if they don't
+    }
+
+    function _getTotalCollateralValueInUsdDeposited(address user)
+        internal
+        view
+        returns (uint256 collateralDepositedByUser)
+    {
         //for each token collateral type, get the value deposited by user, get the usd value, sum them up
-        uint256 collateralDepositedByUser;
         for (uint256 i; i < s_collateralAddresses.length; i++) {
             collateralDepositedByUser +=
                 _usdValueOfCollateral(s_collateralDeposited[user][s_collateralAddresses[i]], s_collateralAddresses[i]);
         }
-
-        return collateralDepositedByUser;
     }
 
-    /////////////////////////////////////
-    // PRIVATE AND VIEW FUNCTIONS //////
-    ///////////////////////////////////
+    ////////////////////////////
+    // PRIVATE FUNCTIONS //////
+    //////////////////////////
+
+    function _getUserAccountInformation(address user)
+        private
+        view
+        returns (uint256 totalOscMinted, uint256 collateralValueInUsd)
+    {
+        totalOscMinted = s_OSCMinted[user];
+        collateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
+    }
+
+    /////////////////////////////////
+    // PRIVATE VIEW FUNCTIONS //////
+    ///////////////////////////////
     function _usdValueOfCollateral(uint256 amount, address collateralAddress) private view returns (uint256) {
         //Use chainlink to get price, multiply price by amount to get usd price of amount. Make sure the decimals are correct
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
@@ -219,4 +256,10 @@ contract OSCEngine is ReentrancyGuard {
         uint256 usdValue = ((uint256(price) * DECIMALPRECISIONVALUE) * amount) / WEIDECIMALPRECISIONVALUE;
         return usdValue;
     }
+
+    /*
+     *Returns how close to liquidation a user is
+     *If a user goes below 1, then they can get liquidated
+    */
+    function _healthFactor() private view returns (uint256) {}
 }
