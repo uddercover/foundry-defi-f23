@@ -39,6 +39,7 @@ contract OSCEngine is ReentrancyGuard {
     error OSCEngine__CollateralAddressesAndPriceFeedAddressesMustBeSameLength();
     error OSCEngine__TransferFailed();
     error OSCEngine__BreaksHealthFactor(uint256);
+    error OSCEngine__MintFailed();
 
     /////////////////////////////
     // TYPE DECLARATIONS     ////
@@ -114,33 +115,15 @@ contract OSCEngine is ReentrancyGuard {
 
     */
     function mint(uint256 amountToBeMinted) external moreThanZero(amountToBeMinted) nonReentrant {
-        /*Checks
-        Retrieve total collateral deposited by user
-            for each token collateral type, get the value deposited by user
-            get the usd value
-            sum them up
-
-        Ensure that amountToBeMinted falls within the range for healthFactor to be stable
-            specify the healthfactor (and all the calculations to keep it stable)
-        */
-
-        /*Effects
-        mint tokens based on value of collateral 
-            Get the 1 usd equivalent of collateral
-                get the eth/usd and btc/usd pricefeed contracts from chainlink
-
-            Check that each token is minted according to the above
-        */
-        //mapping update
+        //Effects
         s_OSCMinted[msg.sender] += amountToBeMinted;
-
-        //actual mint
-        /*Interactions
-        //orenjiStableCoin.mint();
-        */
-
-        //healthfactor check based on collateral deposited
         _revertIfHealthFactorIsBroken(msg.sender);
+
+        //Interactions
+        bool minted = i_orenjiStableCoin.mint(msg.sender, amountToBeMinted);
+        if (!minted) {
+            revert OSCEngine__MintFailed();
+        }
     }
 
     function burn() external {}
