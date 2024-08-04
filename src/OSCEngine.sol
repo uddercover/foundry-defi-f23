@@ -53,7 +53,7 @@ contract OSCEngine is ReentrancyGuard {
     uint256 minimumCollateralETH;
     mapping(address collateralAddress => address priceFeed) private s_priceFeeds;
     mapping(address user => mapping(address tokenCollateral => uint256 amount)) private s_collateralDeposited;
-    mapping(address user => uint256 OSCminted) private s_OSCMinted;
+    mapping(address user => uint256 amountOscminted) private s_OSCMinted;
     address[] private s_collateralAddresses;
 
     /////////////////////////////
@@ -105,8 +105,10 @@ contract OSCEngine is ReentrancyGuard {
     /////////////////////////////
 
     /*
-     * @notice follows CEI
      * @param amountToBeMinted is the amount a user wants to mint
+     * @notice follows CEI
+     * @notice they must have more collateral than amountToBeMinted
+
     */
     function mint(uint256 amountToBeMinted) external moreThanZero(amountToBeMinted) nonReentrant {
         /*Checks
@@ -188,46 +190,32 @@ contract OSCEngine is ReentrancyGuard {
 
     function healthFactor() external {}
 
-    ////////////////////////
-    // PUBLIC FUNCTIONS ///
-    //////////////////////
     function getUserAccountInformation(address user)
-        public
+        external
         returns (uint256 totalOSCMinted, uint256 collateralValueInUsd)
     {
         (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
     }
+
+    ////////////////////////
+    // PUBLIC FUNCTIONS ///
+    //////////////////////
 
     //////////////////////////////////////////
     // PUBLIC AND EXTERNAL VIEW FUNCTIONS ///
     ////////////////////////////////////////
 
     function getTotalCollateralValueInUsdDeposited(address user)
-        public
+        external
         view
-        returns (uint256 collateralDepositedByUser)
+        returns (uint256 totalCollateralValueInUsdDepositedByUser)
     {
-        collateralDepositedByUser = _getTotalCollateralValueInUsdDeposited(user);
+        totalCollateralValueInUsdDepositedByUser = _getTotalCollateralValueInUsdDeposited(user);
     }
 
     /////////////////////////////////
     // INTERNAL VIEW FUNCTIONS //////
     ///////////////////////////////
-    function _revertIfHealthFactorIsBroken(address user, uint256 amount) internal view {
-        //check if they have enough health factor, revert if they don't
-    }
-
-    function _getTotalCollateralValueInUsdDeposited(address user)
-        internal
-        view
-        returns (uint256 collateralDepositedByUser)
-    {
-        //for each token collateral type, get the value deposited by user, get the usd value, sum them up
-        for (uint256 i; i < s_collateralAddresses.length; i++) {
-            collateralDepositedByUser +=
-                _usdValueOfCollateral(s_collateralDeposited[user][s_collateralAddresses[i]], s_collateralAddresses[i]);
-        }
-    }
 
     ////////////////////////////
     // PRIVATE FUNCTIONS //////
@@ -236,15 +224,28 @@ contract OSCEngine is ReentrancyGuard {
     function _getUserAccountInformation(address user)
         private
         view
-        returns (uint256 totalOscMinted, uint256 collateralValueInUsd)
+        returns (uint256 totalOscMinted, uint256 totalCollateralValueInUsd)
     {
         totalOscMinted = s_OSCMinted[user];
-        collateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
+        totalCollateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
     }
 
     /////////////////////////////////
     // PRIVATE VIEW FUNCTIONS //////
     ///////////////////////////////
+
+    function _getTotalCollateralValueInUsdDeposited(address user)
+        private
+        view
+        returns (uint256 totalCollateralValueDepositedByUser)
+    {
+        //for each token collateral type, get the value deposited by user, get the usd value, sum them up
+        for (uint256 i; i < s_collateralAddresses.length; i++) {
+            totalCollateralValueDepositedByUser +=
+                _usdValueOfCollateral(s_collateralDeposited[user][s_collateralAddresses[i]], s_collateralAddresses[i]);
+        }
+    }
+
     function _usdValueOfCollateral(uint256 amount, address collateralAddress) private view returns (uint256) {
         //Use chainlink to get price, multiply price by amount to get usd price of amount. Make sure the decimals are correct
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
@@ -261,5 +262,13 @@ contract OSCEngine is ReentrancyGuard {
      *Returns how close to liquidation a user is
      *If a user goes below 1, then they can get liquidated
     */
-    function _healthFactor() private view returns (uint256) {}
+    function _healthFactor() private view returns (uint256) {
+        (totalOscMinted, collateralValueInUsd) = _getUserAccountInformation(msg.sender);
+    }
+
+    function _revertIfHealthFactorIsBroken(address user, uint256 amount) private view {
+        //check if they have enough health factor, revert if they don't
+        //get the health factor/amount osc left to be minted based on collateral value
+        //if this value is >= amount, allow access, else revert
+    }
 }
