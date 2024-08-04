@@ -38,6 +38,7 @@ contract OSCEngine is ReentrancyGuard {
     error OSCEngine__MustDepositAtLeastMinimumCollateral();
     error OSCEngine__CollateralAddressesAndPriceFeedAddressesMustBeSameLength();
     error OSCEngine__TransferFailed();
+    error OSCEngine__BreaksHealthFactor(uint256);
 
     /////////////////////////////
     // TYPE DECLARATIONS     ////
@@ -49,8 +50,10 @@ contract OSCEngine is ReentrancyGuard {
     OrenjiStableCoin private immutable i_orenjiStableCoin;
     uint256 constant DECIMALPRECISIONVALUE = 1e10;
     uint256 constant WEIDECIMALPRECISIONVALUE = 1e18;
-    uint256 minimumCollateralBTC;
+    uint256 constant LIQUIDATION_THRESHOLD = 50; //that is 50% of collateral
+    uint256 constant LIQUIDATION_PRECISION = 100; // that is 100%
     uint256 minimumCollateralETH;
+
     mapping(address collateralAddress => address priceFeed) private s_priceFeeds;
     mapping(address user => mapping(address tokenCollateral => uint256 amount)) private s_collateralDeposited;
     mapping(address user => uint256 amountOscminted) private s_OSCMinted;
@@ -83,7 +86,7 @@ contract OSCEngine is ReentrancyGuard {
         _;
     }
 
-    /////////////////////////////
+    //////////////////////////////
     // FUNCTIONS             ////
     /////////////////////////////
     constructor(address[] memory collateralAddresses, address[] memory priceFeedAddresses, address stableCoinAddress) {
@@ -135,10 +138,9 @@ contract OSCEngine is ReentrancyGuard {
         /*Interactions
         //orenjiStableCoin.mint();
         */
-        //Would likely go into the health factor check function
-        uint256 totalCollateralValueInUsdDepositedByUser = getTotalCollateralValueInUsdDeposited(msg.sender);
+
         //healthfactor check based on collateral deposited
-        _revertIfHealthFactorIsBroken(msg.sender, amountToBeMinted);
+        _revertIfHealthFactorIsBroken(msg.sender);
     }
 
     function burn() external {}
@@ -188,34 +190,11 @@ contract OSCEngine is ReentrancyGuard {
 
     function liquidate() external {}
 
-    function healthFactor() external {}
-
-    function getUserAccountInformation(address user)
-        external
-        returns (uint256 totalOSCMinted, uint256 collateralValueInUsd)
-    {
-        (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
-    }
+    function oscAvailableToBeMintedBasedOnHealthFactor(address user) external returns (uint256) {}
 
     ////////////////////////
     // PUBLIC FUNCTIONS ///
     //////////////////////
-
-    //////////////////////////////////////////
-    // PUBLIC AND EXTERNAL VIEW FUNCTIONS ///
-    ////////////////////////////////////////
-
-    function getTotalCollateralValueInUsdDeposited(address user)
-        external
-        view
-        returns (uint256 totalCollateralValueInUsdDepositedByUser)
-    {
-        totalCollateralValueInUsdDepositedByUser = _getTotalCollateralValueInUsdDeposited(user);
-    }
-
-    /////////////////////////////////
-    // INTERNAL VIEW FUNCTIONS //////
-    ///////////////////////////////
 
     ////////////////////////////
     // PRIVATE FUNCTIONS //////
@@ -230,6 +209,33 @@ contract OSCEngine is ReentrancyGuard {
         totalCollateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
     }
 
+    //////////////////////////////////////////
+    // PUBLIC AND EXTERNAL VIEW FUNCTIONS ///
+    ////////////////////////////////////////
+    function getUserAccountInformation(address user)
+        external
+        view
+        returns (uint256 totalOSCMinted, uint256 collateralValueInUsd)
+    {
+        (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
+    }
+
+    function getTotalCollateralValueInUsdDeposited(address user)
+        external
+        view
+        returns (uint256 totalCollateralValueInUsdDepositedByUser)
+    {
+        totalCollateralValueInUsdDepositedByUser = _getTotalCollateralValueInUsdDeposited(user);
+    }
+
+    function getUsdValueOfCollateral(address collateralAddress, uint256 amount) external view returns (uint256 value) {
+        value = _usdValueOfCollateral(collateralAddress, amount);
+    }
+
+    /////////////////////////////////
+    // INTERNAL VIEW FUNCTIONS //////
+    ///////////////////////////////
+
     /////////////////////////////////
     // PRIVATE VIEW FUNCTIONS //////
     ///////////////////////////////
@@ -240,35 +246,52 @@ contract OSCEngine is ReentrancyGuard {
         returns (uint256 totalCollateralValueDepositedByUser)
     {
         //for each token collateral type, get the value deposited by user, get the usd value, sum them up
-        for (uint256 i; i < s_collateralAddresses.length; i++) {
-            totalCollateralValueDepositedByUser +=
-                _usdValueOfCollateral(s_collateralDeposited[user][s_collateralAddresses[i]], s_collateralAddresses[i]);
+        for (uint256 i = 0; i < s_collateralAddresses.length; i++) {
+            address collateralAddress = s_collateralAddresses[i];
+            uint256 amount = s_collateralDeposited[user][collateralAddress];
+
+            totalCollateralValueDepositedByUser += _usdValueOfCollateral(collateralAddress, amount);
         }
     }
 
-    function _usdValueOfCollateral(uint256 amount, address collateralAddress) private view returns (uint256) {
+    function _usdValueOfCollateral(address collateralAddress, uint256 amount) private view returns (uint256 usdValue) {
         //Use chainlink to get price, multiply price by amount to get usd price of amount. Make sure the decimals are correct
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
         (, int256 price,,,) = priceFeed.latestRoundData();
 
-        //price is an int and is multiplied by 1e8
-        //amount is a uint and is multiplied by 1e18
-        //match their decimals and type before multiplying
-        uint256 usdValue = ((uint256(price) * DECIMALPRECISIONVALUE) * amount) / WEIDECIMALPRECISIONVALUE;
-        return usdValue;
+        /*price is an int and is multiplied by 1e8
+         *amount is a uint and is multiplied by 1e18
+         *match their decimals and type before multiplying
+         *Also, this is just for eth. It isn't modular and doesn't even account for btc precision.
+          It needs to be refactored.
+        */
+        usdValue = ((uint256(price) * DECIMALPRECISIONVALUE) * amount) / WEIDECIMALPRECISIONVALUE;
     }
 
     /*
      *Returns how close to liquidation a user is
      *If a user goes below 1, then they can get liquidated
     */
-    function _healthFactor() private view returns (uint256) {
-        (totalOscMinted, collateralValueInUsd) = _getUserAccountInformation(msg.sender);
+    function _healthFactor(address user) private view returns (uint256 healthFactor) {
+        (uint256 totalOscMinted, uint256 totalCollateralValueInUsd) = _getUserAccountInformation(user);
+
+        //essentially multiplied by 0.5 but solidity can't do decimals unfortunately :(
+        uint256 adjustedCollateralValueInUsd =
+            (totalCollateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        /*to ensure that to stay above liquidation, the user must deposit double(depending on the liquidation threshold) the collateral value per osc minted
+        Essentially, healthFactor should not fall below 1;
+        */
+        healthFactor = adjustedCollateralValueInUsd / totalOscMinted;
     }
 
-    function _revertIfHealthFactorIsBroken(address user, uint256 amount) private view {
+    function _revertIfHealthFactorIsBroken(address user) private view {
         //check if they have enough health factor, revert if they don't
         //get the health factor/amount osc left to be minted based on collateral value
         //if this value is >= amount, allow access, else revert
+        uint256 userHealthFactor = _healthFactor(user);
+        if (userHealthFactor < 1) {
+            revert OSCEngine__BreaksHealthFactor(userHealthFactor);
+        }
     }
 }
