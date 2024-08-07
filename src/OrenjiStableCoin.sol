@@ -37,7 +37,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  */
 
 contract OrenjiStableCoin is ERC20Burnable, Ownable {
-    constructor(address initialOwner) ERC20("OrenjiStableCoin", "OSC") Ownable(initialOwner) {}
+    constructor() ERC20("OrenjiStableCoin", "OSC") Ownable(msg.sender) {}
 
     error OrenjiStableCoin_CantMintToZeroAddress();
     error OrenjiStableCoin_AmountMustBeGreaterThanZero();
