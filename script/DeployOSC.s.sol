@@ -13,7 +13,7 @@ contract DeployOSC is Script {
     address[] public collateralAddresses;
     address[] public priceFeedAddresses;
 
-    function run() external returns (OrenjiStableCoin, OSCEngine) {
+    function run() external returns (OrenjiStableCoin, OSCEngine, HelperConfig) {
         HelperConfig config = new HelperConfig();
         (
             address weth,
@@ -32,6 +32,6 @@ contract DeployOSC is Script {
         orenjiStableCoin.transferOwnership(address(oscEngine));
         vm.stopBroadcast();
 
-        return (orenjiStableCoin, oscEngine);
+        return (orenjiStableCoin, oscEngine, config);
     }
 }

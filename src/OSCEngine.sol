@@ -40,6 +40,8 @@ contract OSCEngine is ReentrancyGuard {
     error OSCEngine__TransferFailed();
     error OSCEngine__BreaksHealthFactor(uint256);
     error OSCEngine__MintFailed();
+    error OSCEngine__HealthFactorIsStable();
+    error OSCEngine__HealthFactorNotImproved();
 
     /////////////////////////////
     // TYPE DECLARATIONS     ////
@@ -53,7 +55,9 @@ contract OSCEngine is ReentrancyGuard {
     uint256 constant WEIDECIMALPRECISIONVALUE = 1e18;
     uint256 constant LIQUIDATION_THRESHOLD = 50; //that is 50% of collateral
     uint256 constant LIQUIDATION_PRECISION = 100; // that is 100%
+    uint256 constant MIN_HEALTH_FACTOR = 1e18;
     uint256 minimumCollateralETH;
+    uint256 constant LIQUIDATION_BONUS = 10; // 10%
 
     mapping(address collateralAddress => address priceFeed) private s_priceFeeds;
     mapping(address user => mapping(address tokenCollateral => uint256 amount)) private s_collateralDeposited;
@@ -63,13 +67,17 @@ contract OSCEngine is ReentrancyGuard {
     /////////////////////////////
     // EVENTS                ////
     /////////////////////////////
-    event CollateralDeposited(
-        address indexed depositer, address indexed collateralAddress, uint256 indexed amountDeposited
+    event CollateralDeposited(address indexed user, address indexed collateralAddress, uint256 indexed amount);
+
+    event CollateralRedeemed(
+        address indexed from, address indexed to, address indexed collateralAddress, uint256 amount
     );
 
+    event OSCBurnt(address indexed from, address indexed onBehalfOf, uint256 indexed amount);
     /////////////////////////////
     // MODIFIERS             ////
     /////////////////////////////
+
     modifier moreThanZero(uint256 amount) {
         if (amount == 0) {
             revert OSCEngine__MustBeMoreThanZero();
@@ -114,7 +122,7 @@ contract OSCEngine is ReentrancyGuard {
      * @notice they must have more collateral than amountToBeMinted
 
     */
-    function mint(uint256 amountToBeMinted) external moreThanZero(amountToBeMinted) nonReentrant {
+    function mintOsc(uint256 amountToBeMinted) public moreThanZero(amountToBeMinted) nonReentrant {
         //Effects
         s_OSCMinted[msg.sender] += amountToBeMinted;
         _revertIfHealthFactorIsBroken(msg.sender);
@@ -126,9 +134,24 @@ contract OSCEngine is ReentrancyGuard {
         }
     }
 
-    function burn() external {}
+    function burnOsc(uint256 amountOscToBurn) public moreThanZero(amountOscToBurn) nonReentrant {
+        _burnOsc(msg.sender, msg.sender, amountOscToBurn);
+    }
 
-    function depositCollateraltoMintOsc() external {}
+    /*
+     *@param tokenCollateralAddress The address of the collateral to be deposited
+     *@param amountCollateral The amount of collateral to be deposited
+     *@param amountOscToMint The amount of Osc to be minted 
+     *@notice This function deposits collateral and mints OSC in one transaction
+     */
+    function depositCollateralAndMintOsc(
+        address tokenCollateralAddress,
+        uint256 amountCollateral,
+        uint256 amountOscToMint
+    ) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintOsc(amountOscToMint);
+    }
 
     /*
      *@notice follows CEI (Checks, Effects, Interactions)
@@ -136,7 +159,7 @@ contract OSCEngine is ReentrancyGuard {
      *@param amountCollateral The amount of collateral to deposit
      */
     function depositCollateral(address tokenCollateralAddress, uint256 amountCollateral)
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedCollateral(tokenCollateralAddress)
         nonReentrant
@@ -167,11 +190,65 @@ contract OSCEngine is ReentrancyGuard {
         }
     }
 
-    function redeemCollateralForOsc() external {}
+    /*
+     * @param tokenCollateral The address of desired collateral to redeem
+     * @param amountCollateral The amount of collateral to redeem
+     * @param amountOscToBurn The amount of Osc to burn
+     * @notice This function burns specified amount of OSC and redeems the corresponding collateral amount
+     */
+    function redeemCollateralandBurnOsc(address tokenCollateral, uint256 amountCollateral, uint256 amountOscToBurn)
+        external
+    {
+        burnOsc(amountOscToBurn);
+        redeemCollateral(tokenCollateral, amountCollateral);
+    }
 
-    function redeemCollateral() external {}
+    function redeemCollateral(address tokenCollateral, uint256 amountCollateral)
+        public
+        moreThanZero(amountCollateral)
+        nonReentrant
+    {
+        _redeemCollateral(msg.sender, msg.sender, tokenCollateral, amountCollateral);
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
-    function liquidate() external {}
+    /*
+    * @param debtor The user to be liquidated (has broken health factor)
+    * @param amountDebtToPay The amount of debt liquidator wants to pay
+    * @param tokenCollateralAddress The erc20 collateral address to liquidate from the user
+    * @notice This function pays users to liquidate other users with a bad health factor
+    * @notice Assumes the system remains at least 200% overcollateralized. A known bug is if the system is 100% or less overcollateralized
+    * @notice You can partially liquidate a user
+    */
+    function liquidate(address debtor, uint256 amountDebtToPay, address tokenCollateralAddress)
+        external
+        moreThanZero(amountDebtToPay)
+        nonReentrant
+    {
+        //first make sure debtor actually breaks health factor
+        uint256 debtorStartingHealthFactor = _healthFactor(debtor);
+        if (debtorStartingHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert OSCEngine__HealthFactorIsStable();
+        }
+
+        //get how much collateral is equal to the debt. 100$ worth of osc = ?? eth
+        uint256 collateralAmountFromDebtToPay = getCollateralAmountFromUsd(tokenCollateralAddress, amountDebtToPay);
+
+        //pay the liquidator the collateralAmount + 10% of the debt they covered
+        uint256 bonusCollateral = (LIQUIDATION_BONUS * collateralAmountFromDebtToPay) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralToRedeem = collateralAmountFromDebtToPay + bonusCollateral;
+
+        //Now we burn osc and redeem collateral
+        _burnOsc(msg.sender, debtor, amountDebtToPay);
+        _redeemCollateral(debtor, msg.sender, tokenCollateralAddress, totalCollateralToRedeem);
+
+        //revert if debtor's health factor is worse or unchanged
+        uint256 debtorEndHealthFactor = _healthFactor(debtor);
+        if (debtorEndHealthFactor <= debtorStartingHealthFactor) {
+            revert OSCEngine__HealthFactorNotImproved();
+        }
+        _revertIfHealthFactorIsBroken(msg.sender);
+    }
 
     function oscAvailableToBeMintedBasedOnHealthFactor(address user) external returns (uint256) {}
 
@@ -179,22 +256,54 @@ contract OSCEngine is ReentrancyGuard {
     // PUBLIC FUNCTIONS ///
     //////////////////////
 
-    ////////////////////////////
-    // PRIVATE FUNCTIONS //////
-    //////////////////////////
+    /////////////////////////////////////////
+    // PRIVATE AND INTERNAL FUNCTIONS //////
+    ///////////////////////////////////////
+    /*
+     * @dev Low-level internal function. Do not call unless function calling is checking for healthFactor being broken after
+     */
+    function _redeemCollateral(address from, address to, address tokenCollateralAddress, uint256 amount) private {
+        s_collateralDeposited[from][tokenCollateralAddress] -= amount;
+        emit CollateralRedeemed(from, to, tokenCollateralAddress, amount);
 
-    function _getUserAccountInformation(address user)
-        private
-        view
-        returns (uint256 totalOscMinted, uint256 totalCollateralValueInUsd)
-    {
-        totalOscMinted = s_OSCMinted[user];
-        totalCollateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amount);
+        if (!success) {
+            revert OSCEngine__TransferFailed();
+        }
+    }
+
+    function _burnOsc(address from, address onBehalfOf, uint256 amount) private {
+        s_OSCMinted[onBehalfOf] -= amount;
+        emit OSCBurnt(from, onBehalfOf, amount);
+        bool success = IERC20(i_orenjiStableCoin).transferFrom(from, address(this), amount);
+        if (!success) {
+            revert OSCEngine__TransferFailed();
+        }
+        i_orenjiStableCoin.burn(amount);
     }
 
     //////////////////////////////////////////
     // PUBLIC AND EXTERNAL VIEW FUNCTIONS ///
     ////////////////////////////////////////
+    function getCollateralAmountFromUsd(address collateralAddress, uint256 usdAmountInWei)
+        public
+        view
+        returns (uint256 collateralAmount)
+    {
+        //Use chainlink to get price, multiply price by amount to get usd price of amount. Make sure the decimals are correct
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        /*
+         *the goal is to have the final result in xe18 (wei)
+         *price:  an int, multiplied by 1e8
+         *amount: a uint, multiplied by 1e18
+         *match their decimals and type before dividing
+
+        */
+        collateralAmount = ((usdAmountInWei * WEIDECIMALPRECISIONVALUE) / (uint256(price) * DECIMALPRECISIONVALUE));
+    }
+
     function getUserAccountInformation(address user)
         external
         view
@@ -215,13 +324,9 @@ contract OSCEngine is ReentrancyGuard {
         value = _usdValueOfCollateral(collateralAddress, amount);
     }
 
-    /////////////////////////////////
-    // INTERNAL VIEW FUNCTIONS //////
-    ///////////////////////////////
-
-    /////////////////////////////////
-    // PRIVATE VIEW FUNCTIONS //////
-    ///////////////////////////////
+    //////////////////////////////////////////////
+    // INTERNAL AND PRIVATE VIEW FUNCTIONS //////
+    ////////////////////////////////////////////
 
     function _getTotalCollateralValueInUsdDeposited(address user)
         private
@@ -237,18 +342,25 @@ contract OSCEngine is ReentrancyGuard {
         }
     }
 
-    function _usdValueOfCollateral(address collateralAddress, uint256 amount) private view returns (uint256 usdValue) {
+    function _usdValueOfCollateral(address collateralAddress, uint256 amountInWei)
+        private
+        view
+        returns (uint256 usdValue)
+    {
         //Use chainlink to get price, multiply price by amount to get usd price of amount. Make sure the decimals are correct
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
         (, int256 price,,,) = priceFeed.latestRoundData();
 
-        /*price is an int and is multiplied by 1e8
-         *amount is a uint and is multiplied by 1e18
-         *match their decimals and type before multiplying
+        /*
+         *the goal is to have the final result in xe18 (wei)
+         *price:  an int, multiplied by 1e8
+         *amount: a uint, multiplied by 1e18
+         *so we have to match their decimals and type before multiplying
          *Also, this is just for eth. It isn't modular and doesn't even account for btc precision.
           It needs to be refactored.
+
         */
-        usdValue = ((uint256(price) * DECIMALPRECISIONVALUE) * amount) / WEIDECIMALPRECISIONVALUE;
+        usdValue = ((uint256(price) * DECIMALPRECISIONVALUE) * amountInWei) / WEIDECIMALPRECISIONVALUE;
     }
 
     /*
@@ -273,8 +385,17 @@ contract OSCEngine is ReentrancyGuard {
         //get the health factor/amount osc left to be minted based on collateral value
         //if this value is >= amount, allow access, else revert
         uint256 userHealthFactor = _healthFactor(user);
-        if (userHealthFactor < 1) {
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert OSCEngine__BreaksHealthFactor(userHealthFactor);
         }
+    }
+
+    function _getUserAccountInformation(address user)
+        private
+        view
+        returns (uint256 totalOscMinted, uint256 totalCollateralValueInUsd)
+    {
+        totalOscMinted = s_OSCMinted[user];
+        totalCollateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
     }
 }
