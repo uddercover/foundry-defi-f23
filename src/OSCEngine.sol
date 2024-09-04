@@ -27,6 +27,7 @@ import {OrenjiStableCoin} from "./OrenjiStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/interfaces/AggregatorV3Interface.sol";
+import {console} from "forge-std/Test.sol";
 
 contract OSCEngine is ReentrancyGuard {
     //////////////////
@@ -42,6 +43,8 @@ contract OSCEngine is ReentrancyGuard {
     error OSCEngine__MintFailed();
     error OSCEngine__HealthFactorIsStable();
     error OSCEngine__HealthFactorNotImproved();
+    error OSCEngine__NoOscToBurn();
+    error OSCEngine__BurnFailed();
 
     /////////////////////////////
     // TYPE DECLARATIONS     ////
@@ -74,6 +77,7 @@ contract OSCEngine is ReentrancyGuard {
     );
 
     event OSCBurnt(address indexed from, address indexed onBehalfOf, uint256 indexed amount);
+    event BurnSuccess();
     /////////////////////////////
     // MODIFIERS             ////
     /////////////////////////////
@@ -99,7 +103,7 @@ contract OSCEngine is ReentrancyGuard {
     // FUNCTIONS             ////
     /////////////////////////////
     constructor(address[] memory collateralAddresses, address[] memory priceFeedAddresses, address stableCoinAddress) {
-        if (collateralAddresses.length > priceFeedAddresses.length) {
+        if (collateralAddresses.length != priceFeedAddresses.length) {
             revert OSCEngine__CollateralAddressesAndPriceFeedAddressesMustBeSameLength();
         }
 
@@ -220,26 +224,29 @@ contract OSCEngine is ReentrancyGuard {
     * @notice Assumes the system remains at least 200% overcollateralized. A known bug is if the system is 100% or less overcollateralized
     * @notice You can partially liquidate a user
     */
-    function liquidate(address debtor, uint256 amountDebtToPay, address tokenCollateralAddress)
+    function liquidate(address debtor, uint256 oscAmountDebtToPay, address tokenCollateralAddress)
         external
-        moreThanZero(amountDebtToPay)
+        moreThanZero(oscAmountDebtToPay)
         nonReentrant
     {
         //first make sure debtor actually breaks health factor
         uint256 debtorStartingHealthFactor = _healthFactor(debtor);
+
         if (debtorStartingHealthFactor >= MIN_HEALTH_FACTOR) {
             revert OSCEngine__HealthFactorIsStable();
         }
-
+        //necessary because getCollateralAmountFromUsd takes the amount in wei
+        uint256 oscAmountDebtToPayInWei = oscAmountDebtToPay * WEIDECIMALPRECISIONVALUE;
         //get how much collateral is equal to the debt. 100$ worth of osc = ?? eth
-        uint256 collateralAmountFromDebtToPay = getCollateralAmountFromUsd(tokenCollateralAddress, amountDebtToPay);
+        uint256 collateralAmountFromDebtToPay =
+            getCollateralAmountFromUsd(tokenCollateralAddress, oscAmountDebtToPayInWei);
 
         //pay the liquidator the collateralAmount + 10% of the debt they covered
         uint256 bonusCollateral = (LIQUIDATION_BONUS * collateralAmountFromDebtToPay) / LIQUIDATION_PRECISION;
         uint256 totalCollateralToRedeem = collateralAmountFromDebtToPay + bonusCollateral;
 
         //Now we burn osc and redeem collateral
-        _burnOsc(msg.sender, debtor, amountDebtToPay);
+        _burnOsc(msg.sender, debtor, oscAmountDebtToPay);
         _redeemCollateral(debtor, msg.sender, tokenCollateralAddress, totalCollateralToRedeem);
 
         //revert if debtor's health factor is worse or unchanged
@@ -249,8 +256,6 @@ contract OSCEngine is ReentrancyGuard {
         }
         _revertIfHealthFactorIsBroken(msg.sender);
     }
-
-    function oscAvailableToBeMintedBasedOnHealthFactor(address user) external returns (uint256) {}
 
     ////////////////////////
     // PUBLIC FUNCTIONS ///
@@ -273,6 +278,9 @@ contract OSCEngine is ReentrancyGuard {
     }
 
     function _burnOsc(address from, address onBehalfOf, uint256 amount) private {
+        if (s_OSCMinted[onBehalfOf] <= 0) {
+            revert OSCEngine__NoOscToBurn();
+        }
         s_OSCMinted[onBehalfOf] -= amount;
         emit OSCBurnt(from, onBehalfOf, amount);
         bool success = IERC20(i_orenjiStableCoin).transferFrom(from, address(this), amount);
@@ -280,6 +288,7 @@ contract OSCEngine is ReentrancyGuard {
             revert OSCEngine__TransferFailed();
         }
         i_orenjiStableCoin.burn(amount);
+        console.log(s_OSCMinted[onBehalfOf]);
     }
 
     //////////////////////////////////////////
@@ -310,6 +319,10 @@ contract OSCEngine is ReentrancyGuard {
         returns (uint256 totalOSCMinted, uint256 collateralValueInUsd)
     {
         (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
+    }
+
+    function getUserHealthFactor(address user) external returns (uint256 healthFactor) {
+        healthFactor = _healthFactor(user);
     }
 
     function getTotalCollateralValueInUsdDeposited(address user)
@@ -370,6 +383,9 @@ contract OSCEngine is ReentrancyGuard {
     function _healthFactor(address user) private view returns (uint256 healthFactor) {
         (uint256 totalOscMinted, uint256 totalCollateralValueInUsd) = _getUserAccountInformation(user);
 
+        if (totalOscMinted == 0) {
+            return type(uint256).max;
+        }
         //essentially multiplied by 0.5 but solidity can't do decimals unfortunately :(
         uint256 adjustedCollateralValueInUsd =
             (totalCollateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;

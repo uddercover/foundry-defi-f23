@@ -39,16 +39,16 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract OrenjiStableCoin is ERC20Burnable, Ownable {
     constructor() ERC20("OrenjiStableCoin", "OSC") Ownable(msg.sender) {}
 
-    error OrenjiStableCoin_CantMintToZeroAddress();
-    error OrenjiStableCoin_AmountMustBeGreaterThanZero();
-    error OrenjiStableCoin_BalanceMustBeGreaterThanZero();
+    error OrenjiStableCoin__CantMintToZeroAddress();
+    error OrenjiStableCoin__AmountMustBeGreaterThanZero();
+    error OrenjiStableCoin__BalanceMustBeGreaterThanZero();
 
     function mint(address _to, uint256 _amount) public onlyOwner returns (bool) {
         if (_to == address(0)) {
-            revert OrenjiStableCoin_CantMintToZeroAddress();
+            revert OrenjiStableCoin__CantMintToZeroAddress();
         }
         if (_amount <= 0) {
-            revert OrenjiStableCoin_AmountMustBeGreaterThanZero();
+            revert OrenjiStableCoin__AmountMustBeGreaterThanZero();
         }
         _mint(_to, _amount);
         return true;
@@ -56,10 +56,10 @@ contract OrenjiStableCoin is ERC20Burnable, Ownable {
 
     function burn(uint256 _amount) public override onlyOwner {
         if (_amount == 0) {
-            revert OrenjiStableCoin_AmountMustBeGreaterThanZero();
+            revert OrenjiStableCoin__AmountMustBeGreaterThanZero();
         }
         if (balanceOf(msg.sender) < _amount) {
-            revert OrenjiStableCoin_BalanceMustBeGreaterThanZero();
+            revert OrenjiStableCoin__BalanceMustBeGreaterThanZero();
         }
         super.burn(_amount);
     }
