@@ -23,7 +23,7 @@ contract OSCTest is Test {
     uint256 constant ETH_AMOUNT_COLLATERAL = 4 ether;
     uint256 constant STARTING_ETH_AMOUNT = 20 ether;
     uint256 constant DEFAULT_OSC_VALUE = 2000;
-    int256 constant NEW_ETH_PRICE = 500e8;
+    int256 constant NEW_ETH_PRICE = 800e8;
 
     function setUp() public {
         deployer = new DeployOSC();
@@ -248,15 +248,28 @@ contract OSCTest is Test {
         osce.liquidate(USER, 2000, weth);
         vm.stopPrank();
 
-        (uint256 totalDaveCollateral, uint256 totalOscMintedDave) = osce.getUserAccountInformation(DAVE);
-
-        uint256 expectedDaveWethBalance = 2.2 ether;
+        uint256 expectedDaveWethBalance = 2.75 ether;
         uint256 actualDaveWethBalance = ERC20Mock(address(weth)).balanceOf(DAVE);
 
         assertEq(expectedDaveWethBalance, actualDaveWethBalance);
     }
 
     function testRevertsIfHealthFactorDoesNotImprove() public userDepositedWethAndMintedOsc {}
+
+    function testRevertsIfLiquidatorHealthFactorIsBroken()
+        public
+        userDepositedWethAndMintedOsc
+        daveDepositedWethAndMintedOsc
+        daveApprovesOsc
+    {
+        vm.startPrank(DAVE);
+        osce.mintOsc(18000);
+        MockV3Aggregator(wethUsdPriceFeed).updateAnswer(NEW_ETH_PRICE);
+
+        vm.expectRevert(abi.encodeWithSelector(OSCEngine.OSCEngine__BreaksHealthFactor.selector, 4e17));
+        osce.liquidate(USER, 2000, weth);
+        vm.stopPrank();
+    }
 
     //Getter Tests
     function testUserCanGetTotalCollateralValueInUsdDeposited() public userDepositedWeth {
@@ -271,5 +284,10 @@ contract OSCTest is Test {
         vm.prank(USER);
         uint256 healthFactor = osce.getUserHealthFactor(USER);
         assert(healthFactor > 1);
+    }
+
+    function testUserCanGetCollateralTokens() public userDepositedWeth {
+        address[] memory tokenAddresses = osce.getCollateralTokenAddresses();
+        assert(tokenAddresses.length == 2);
     }
 }

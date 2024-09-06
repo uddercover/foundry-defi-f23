@@ -113,6 +113,7 @@ contract OSCEngine is ReentrancyGuard {
         }
         //s_priceFeeds(address(0)) = address(0); //placeholders: zero address
         //s_priceFeeds(address(0)) = address(0);
+        console.log(s_collateralAddresses.length);
         i_orenjiStableCoin = OrenjiStableCoin(stableCoinAddress);
     }
 
@@ -221,7 +222,7 @@ contract OSCEngine is ReentrancyGuard {
     * @param amountDebtToPay The amount of debt liquidator wants to pay
     * @param tokenCollateralAddress The erc20 collateral address to liquidate from the user
     * @notice This function pays users to liquidate other users with a bad health factor
-    * @notice Assumes the system remains at least 200% overcollateralized. A known bug is if the system is 100% or less overcollateralized
+    * @notice Assumes the system remains at least 200% overcollateralized. A known bug is if the system is less than 110% overcollateralized
     * @notice You can partially liquidate a user
     */
     function liquidate(address debtor, uint256 oscAmountDebtToPay, address tokenCollateralAddress)
@@ -321,7 +322,7 @@ contract OSCEngine is ReentrancyGuard {
         (totalOSCMinted, collateralValueInUsd) = _getUserAccountInformation(user);
     }
 
-    function getUserHealthFactor(address user) external returns (uint256 healthFactor) {
+    function getUserHealthFactor(address user) external view returns (uint256 healthFactor) {
         healthFactor = _healthFactor(user);
     }
 
@@ -335,6 +336,19 @@ contract OSCEngine is ReentrancyGuard {
 
     function getUsdValueOfCollateral(address collateralAddress, uint256 amount) external view returns (uint256 value) {
         value = _usdValueOfCollateral(collateralAddress, amount);
+    }
+
+    function getCollateralTokenAddresses() external view returns (address[] memory) {
+        return _getCollateralTokenAddresses();
+    }
+    //untested
+
+    function getTotalSupplyOfOscMinted() external view returns (uint256) {
+        return i_orenjiStableCoin.totalSupply();
+    }
+
+    function getCollateralDepositedByUser(address collateral, address user) external view returns (uint256) {
+        return s_collateralDeposited[collateral][user];
     }
 
     //////////////////////////////////////////////
@@ -413,5 +427,9 @@ contract OSCEngine is ReentrancyGuard {
     {
         totalOscMinted = s_OSCMinted[user];
         totalCollateralValueInUsd = _getTotalCollateralValueInUsdDeposited(user);
+    }
+
+    function _getCollateralTokenAddresses() private view returns (address[] memory) {
+        return s_collateralAddresses;
     }
 }
