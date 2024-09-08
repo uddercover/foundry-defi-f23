@@ -243,6 +243,7 @@ contract OSCTest is Test {
         daveApprovesOsc
     {
         MockV3Aggregator(wethUsdPriceFeed).updateAnswer(NEW_ETH_PRICE);
+        console.log("User health factor", osce.getUserHealthFactor(USER));
 
         vm.startPrank(DAVE);
         osce.liquidate(USER, 2000, weth);

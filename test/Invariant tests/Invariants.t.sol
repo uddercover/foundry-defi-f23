@@ -47,6 +47,15 @@ contract Invariants is StdInvariant, Test {
         uint256 totalCollateralValue = totalWethValue + totalWbtcValue;
         uint256 totalOscMinted = osce.getTotalSupplyOfOscMinted();
 
+        console.log("Total Weth Value: ", totalWethValue);
+        console.log("Total Wbtc Value: ", totalWbtcValue);
+        console.log("Total Osc Minted: ", totalOscMinted);
+
         assert(totalCollateralValue >= totalOscMinted);
+    }
+
+    function invariant_testGettersNeverRevert() public view {
+        osce.getCollateralTokenAddresses();
+        osce.getTotalSupplyOfOscMinted();
     }
 }

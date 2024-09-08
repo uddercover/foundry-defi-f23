@@ -113,7 +113,6 @@ contract OSCEngine is ReentrancyGuard {
         }
         //s_priceFeeds(address(0)) = address(0); //placeholders: zero address
         //s_priceFeeds(address(0)) = address(0);
-        console.log(s_collateralAddresses.length);
         i_orenjiStableCoin = OrenjiStableCoin(stableCoinAddress);
     }
 
@@ -289,7 +288,6 @@ contract OSCEngine is ReentrancyGuard {
             revert OSCEngine__TransferFailed();
         }
         i_orenjiStableCoin.burn(amount);
-        console.log(s_OSCMinted[onBehalfOf]);
     }
 
     //////////////////////////////////////////
@@ -351,6 +349,15 @@ contract OSCEngine is ReentrancyGuard {
         return s_collateralDeposited[collateral][user];
     }
 
+    function getTotalOscUserCanStillMint(address user) external view returns (uint256 oscUserCanStillMint) {
+        (uint256 totalOSCMinted, uint256 collateralValueInUsd) = _getUserAccountInformation(user);
+        //The collateralValueInUsd is in wei while osc value is tracked normally
+        //as such, we have to divide by 1e18 to get collateralValueInUsd tracked strictly in usd
+        //Then we divide by 2 to respect the 200% over-collateralization goal
+        //lastly we minus any osc that has already been minted by the user
+        oscUserCanStillMint = ((collateralValueInUsd / WEIDECIMALPRECISIONVALUE) / 2) - totalOSCMinted;
+    }
+
     //////////////////////////////////////////////
     // INTERNAL AND PRIVATE VIEW FUNCTIONS //////
     ////////////////////////////////////////////
@@ -405,9 +412,10 @@ contract OSCEngine is ReentrancyGuard {
             (totalCollateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
 
         /*to ensure that to stay above liquidation, the user must deposit double(depending on the liquidation threshold) the collateral value per osc minted
-        Essentially, healthFactor should not fall below 1;
+        Essentially, healthFactor should not fall below 1e18;
+        multiplied by 1e18 to make the decimals equal
         */
-        healthFactor = adjustedCollateralValueInUsd / totalOscMinted;
+        healthFactor = (adjustedCollateralValueInUsd) / totalOscMinted;
     }
 
     function _revertIfHealthFactorIsBroken(address user) private view {

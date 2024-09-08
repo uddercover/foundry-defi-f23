@@ -17,6 +17,8 @@ contract Handler is Test {
     OrenjiStableCoin osc;
     address weth;
     address wbtc;
+    uint256 totalTimesMintIsCalled;
+    address[] public usersWithCollateralDeposited;
 
     uint256 MAX_DEPOSIT_AMOUNT = type(uint96).max;
 
@@ -41,6 +43,8 @@ contract Handler is Test {
 
         osce.depositCollateral(token, amountCollateral);
         vm.stopPrank();
+        //some users may get pushed twice or more
+        usersWithCollateralDeposited.push(msg.sender);
     }
 
     function redeemCollateral(uint256 collateralSeed, uint256 amountCollateral) public {
@@ -52,6 +56,32 @@ contract Handler is Test {
         }
 
         osce.redeemCollateral(token, amountCollateral);
+    }
+
+    function mintOsc(uint256 amount, uint256 addressSeed) public {
+        //should deposit first
+        if (usersWithCollateralDeposited.length == 0) {
+            return;
+        }
+        uint256 index = addressSeed % usersWithCollateralDeposited.length;
+        address sender = usersWithCollateralDeposited[index];
+        //amount should not be 0 or more than user can mint
+        int256 maxOscUserCanMint = int256(osce.getTotalOscUserCanStillMint(sender));
+        if (maxOscUserCanMint < 0) {
+            return;
+        }
+
+        amount = bound(amount, 0, uint256(maxOscUserCanMint));
+        if (amount == 0) {
+            return;
+        }
+
+        vm.startPrank(sender);
+        osce.mintOsc(amount);
+        vm.stopPrank();
+
+        totalTimesMintIsCalled++;
+        console.log("Total times mint is called: ", totalTimesMintIsCalled);
     }
 
     //helper functions
